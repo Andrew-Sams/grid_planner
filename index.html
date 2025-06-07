@@ -61,13 +61,36 @@
       </div>
 
       <div class="mb-2">
-        <label class="form-label">Substation Size (MW)</label>
+        <label class="form-label">Dist Substation Size (MW)</label>
         <input id="subSizeInput" type="number" class="form-control" value="50" step="10">
       </div>
 
       <div class="mb-2">
-        <label class="form-label">Substation CAPEX (M$)</label>
+        <label class="form-label">Dist Substation CAPEX (M$)</label>
         <input id="subCostInput" type="number" class="form-control" value="15" step="1">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Home Electrification Growth (μ, σ) %</label>
+        <div class="input-group">
+          <input id="homeMuInput" type="number" class="form-control" value="1" step=".1">
+          <input id="homeSdInput" type="number" class="form-control" value="0.5" step=".1">
+        </div>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Data Center Probability %</label>
+        <input id="dataProbInput" type="number" class="form-control" value="10" step="1">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Data Center Size (MW)</label>
+        <input id="dataSizeInput" type="number" class="form-control" value="30" step="10">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">HV Substation Size (MW)</label>
+        <input id="hvSubSizeInput" type="number" class="form-control" value="100" step="10">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">HV Substation CAPEX (M$)</label>
+        <input id="hvSubCostInput" type="number" class="form-control" value="30" step="1">
       </div>
 
       <button id="runBtn" class="btn btn-primary w-100 mt-2">
@@ -85,15 +108,22 @@
       </div>
     </div>
 
+    <div class="card p-4 mb-4">
+      <h2 class="h6 mb-3">Average Load vs Capacity</h2>
+      <div class="chart-wrap">
+        <canvas id="growthChart"></canvas>
+      </div>
+    </div>
+
     <div class="card p-4">
-      <h2 class="h6 mb-3">Sub-Region Summary (P10 / P50 / P90)</h2>
+      <h2 class="h6 mb-3">Sub-Region Summary (P50)</h2>
       <div class="table-responsive">
         <table id="summaryTable" class="table table-hover small align-middle mb-0">
-          <thead><tr>
-            <th>Region</th><th class="text-center">Capacity (MW)</th>
-            <th class="text-center">P10 Subs</th><th class="text-center">P50 Subs</th><th class="text-center">P90 Subs</th>
-            <th class="text-center">P50 CAPEX (M$)</th>
-          </tr></thead>
+            <thead><tr>
+              <th>Region</th><th class="text-center">Capacity (MW)</th>
+              <th class="text-center">P50 Dist Subs</th><th class="text-center">P50 HV Subs</th>
+              <th class="text-center">P50 Dist CAPEX</th><th class="text-center">P50 HV CAPEX</th>
+            </tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -133,38 +163,65 @@ const randNorm = (() => {
 })();
 
 /* Main simulation engine -------------------------------------- */
-function runSimulation(iterations, mu, sd, subSize, subCost){
-  // Stats holders
-  const subsDist = regions.map(() => []);   // per-region array of sub counts
-  const capexDist = [];                     // total capex per iteration
+function runSimulation(iters, mu, sd, homeMu, homeSd,
+                      dataProb, dataSize,
+                      distSize, distCost,
+                      hvSize, hvCost){
+  const years = 11; // 2025-2035
+  const distSubsDist = regions.map(() => []);
+  const hvSubsDist   = regions.map(() => []);
+  const distCapexDist = [];
+  const hvCapexDist   = [];
+  const loadAccum = Array(years).fill(0);
+  const capAccum  = Array(years).fill(0);
 
-  for(let k=0; k<iterations; k++){
-    let totalCapex = 0;
+  for(let k=0;k<iters;k++){
+    let distCapex=0, hvCapex=0;
+    const yrLoad=Array(years).fill(0);
+    const yrCap=Array(years).fill(0);
 
-    regions.forEach((r,i) => {
-      // Clone capacity & load for this iteration
-      let cap   = r.baseCap;
-      let load  = r.baseLoad;
+    regions.forEach((r,i)=>{
+      let cap=r.baseCap;
+      let load=r.baseLoad;
+      let distSubs=0, hvSubs=0;
+      yrLoad[0]+=load; yrCap[0]+=cap;
 
-      // Project 2025->2035
-      for(let yr=2026; yr<=2035; yr++){
-        const growth = randNorm(mu, sd);  // % growth this year
-        load *= 1 + growth/100;
+      for(let yr=1; yr<years; yr++){
+        const g = randNorm(mu, sd);
+        const h = randNorm(homeMu, homeSd);
+        load *= 1 + (g+h)/100;
 
-        if(load > cap){
-          // Need N substations of fixed size
-          const needed = Math.ceil((load-cap)/subSize);
-          cap   += needed*subSize;
-          totalCapex += needed*subCost;
+        if(Math.random()<dataProb/100){
+          load += dataSize;
+          const neededHV=Math.ceil(dataSize/hvSize);
+          hvSubs+=neededHV;
+          hvCapex+=neededHV*hvCost;
         }
+
+        if(load>cap){
+          const neededDist=Math.ceil((load-cap)/distSize);
+          cap+=neededDist*distSize;
+          distSubs+=neededDist;
+          distCapex+=neededDist*distCost;
+        }
+        yrLoad[yr]+=load;
+        yrCap[yr]+=cap;
       }
-      // Record outcome for this region
-      subsDist[i].push( (cap-r.baseCap) / subSize ); // # of additions
+
+      distSubsDist[i].push(distSubs);
+      hvSubsDist[i].push(hvSubs);
     });
-    capexDist.push(totalCapex);
+
+    distCapexDist.push(distCapex);
+    hvCapexDist.push(hvCapex);
+
+    for(let y=0;y<years;y++){ loadAccum[y]+=yrLoad[y]; capAccum[y]+=yrCap[y]; }
   }
 
-  return {subsDist, capexDist};
+  const meanLoad=loadAccum.map(v=>v/iters);
+  const meanCap =capAccum.map(v=>v/iters);
+
+  return {distSubsDist,hvSubsDist,distCapexDist,hvCapexDist,meanLoad,meanCap};
 }
 
 /* Percentile util --------------------------------------------- */
@@ -182,35 +239,49 @@ function percentile(arr, p){
 --------------------------------------------------------------------*/
 document.getElementById('runBtn').addEventListener('click', () => {
   // Pull settings
-  const iters   = +document.getElementById('iterInput').value || 1000;
-  const mu      = +document.getElementById('muInput').value  || 3;
-  const sd      = +document.getElementById('sdInput').value  || 1.5;
-  const subSize = +document.getElementById('subSizeInput').value || 50;
-  const subCost = +document.getElementById('subCostInput').value || 15;
+  const iters      = +document.getElementById('iterInput').value || 1000;
+  const mu         = +document.getElementById('muInput').value  || 3;
+  const sd         = +document.getElementById('sdInput').value  || 1.5;
+  const homeMu     = +document.getElementById('homeMuInput').value  || 1;
+  const homeSd     = +document.getElementById('homeSdInput').value  || 0.5;
+  const dataProb   = +document.getElementById('dataProbInput').value || 10;
+  const dataSize   = +document.getElementById('dataSizeInput').value || 30;
+  const distSize   = +document.getElementById('subSizeInput').value || 50;
+  const distCost   = +document.getElementById('subCostInput').value || 15;
+  const hvSize     = +document.getElementById('hvSubSizeInput').value || 100;
+  const hvCost     = +document.getElementById('hvSubCostInput').value || 30;
 
-  // Run Monte-Carlo
-  const {subsDist, capexDist} = runSimulation(iters, mu, sd, subSize, subCost);
+  const {
+    distSubsDist, hvSubsDist,
+    distCapexDist, hvCapexDist,
+    meanLoad, meanCap
+  } = runSimulation(iters, mu, sd, homeMu, homeSd,
+                    dataProb, dataSize,
+                    distSize, distCost,
+                    hvSize, hvCost);
 
-  // Build summary arrays
-  const p10 = [], p50 = [], p90 = [];
-  subsDist.forEach(arr=>{
-    p10.push(percentile(arr,10));
-    p50.push(percentile(arr,50));
-    p90.push(percentile(arr,90));
-  });
+  const distP50=[], hvP50=[];
+  distSubsDist.forEach(arr=>distP50.push(percentile(arr,50)));
+  hvSubsDist.forEach(arr=>hvP50.push(percentile(arr,50)));
 
-  // System-level stats
   const system = {
-    p10: p10.reduce((a,b)=>a+b,0),
-    p50: p50.reduce((a,b)=>a+b,0),
-    p90: p90.reduce((a,b)=>a+b,0),
-    capex10: percentile(capexDist,10),
-    capex50: percentile(capexDist,50),
-    capex90: percentile(capexDist,90)
+    distP10: distSubsDist.map(a=>percentile(a,10)).reduce((a,b)=>a+b,0),
+    distP50: distP50.reduce((a,b)=>a+b,0),
+    distP90: distSubsDist.map(a=>percentile(a,90)).reduce((a,b)=>a+b,0),
+    hvP10: hvSubsDist.map(a=>percentile(a,10)).reduce((a,b)=>a+b,0),
+    hvP50: hvP50.reduce((a,b)=>a+b,0),
+    hvP90: hvSubsDist.map(a=>percentile(a,90)).reduce((a,b)=>a+b,0),
+    distCapex10: percentile(distCapexDist,10),
+    distCapex50: percentile(distCapexDist,50),
+    distCapex90: percentile(distCapexDist,90),
+    hvCapex10: percentile(hvCapexDist,10),
+    hvCapex50: percentile(hvCapexDist,50),
+    hvCapex90: percentile(hvCapexDist,90)
   };
 
   updateChart(system);
-  updateTable(p10,p50,p90,subCost);
+  updateGrowthChart(meanLoad, meanCap);
+  updateTable(distP50, hvP50, distCost, hvCost);
 });
 
 /* -------------------------------------------------------------------
@@ -223,11 +294,11 @@ function updateChart(s){
   sysChart=new Chart(ctx,{
     type:'bar',
     data:{
-      labels:['Substations','CAPEX (M$)'],
+      labels:['Dist Subs','HV Subs','Dist CAPEX','HV CAPEX'],
       datasets:[
-        {label:'P10',data:[s.p10,s.capex10],backgroundColor:'#e9ecef'},
-        {label:'P50',data:[s.p50,s.capex50],backgroundColor:'#0d6efd55'},
-        {label:'P90',data:[s.p90,s.capex90],backgroundColor:'#0d6efd'}
+        {label:'P10',data:[s.distP10,s.hvP10,s.distCapex10,s.hvCapex10],backgroundColor:'#e9ecef'},
+        {label:'P50',data:[s.distP50,s.hvP50,s.distCapex50,s.hvCapex50],backgroundColor:'#0d6efd55'},
+        {label:'P90',data:[s.distP90,s.hvP90,s.distCapex90,s.hvCapex90],backgroundColor:'#0d6efd'}
       ]
     },
     options:{
@@ -238,10 +309,29 @@ function updateChart(s){
   });
 }
 
+let growthChart;
+function updateGrowthChart(loadArr, capArr){
+  if(growthChart) growthChart.destroy();
+  const ctx=document.getElementById('growthChart');
+  const labels=[];
+  for(let yr=2025; yr<=2035; yr++) labels.push(yr);
+  growthChart=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels,
+      datasets:[
+        {label:'Load',data:loadArr,borderColor:'#0d6efd',backgroundColor:'transparent'},
+        {label:'Capacity',data:capArr,borderColor:'#198754',backgroundColor:'transparent'}
+      ]
+    },
+    options:{plugins:{legend:{position:'bottom'}},responsive:true,scales:{y:{beginAtZero:true}}}
+  });
+}
+
 /* -------------------------------------------------------------------
    4. HTML table for sub-region stats
 --------------------------------------------------------------------*/
-function updateTable(p10,p50,p90,subCost){
+function updateTable(distP50,hvP50,distCost,hvCost){
   const tbody=document.querySelector('#summaryTable tbody');
   tbody.innerHTML='';
   regions.forEach((r,i)=>{
@@ -249,10 +339,10 @@ function updateTable(p10,p50,p90,subCost){
     tr.innerHTML=`
       <td>${r.id}</td>
       <td class="text-center">${r.baseCap}</td>
-      <td class="text-center">${p10[i].toFixed(1)}</td>
-      <td class="text-center fw-bold">${p50[i].toFixed(1)}</td>
-      <td class="text-center">${p90[i].toFixed(1)}</td>
-      <td class="text-center">${(p50[i]*subCost).toFixed(1)}</td>`;
+      <td class="text-center">${distP50[i].toFixed(1)}</td>
+      <td class="text-center">${hvP50[i].toFixed(1)}</td>
+      <td class="text-center">${(distP50[i]*distCost).toFixed(1)}</td>
+      <td class="text-center">${(hvP50[i]*hvCost).toFixed(1)}</td>`;
     tbody.appendChild(tr);
   });
 }
