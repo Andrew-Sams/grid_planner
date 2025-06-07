@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Probabilistic Grid Capacity Sandbox</title>
+
+  <!-- ─── AESTHETIC / LAYOUT ──────────────────────────────────────────────── -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --accent: #0d6efd;
+      --gray:   #f8f9fa;
+      --dark:   #323a45;
+    }
+    body        { background: var(--gray); color: var(--dark); }
+    header h1   { font-weight: 600; letter-spacing: -.5px; }
+    .card       { border: none; box-shadow: 0 2px 4px rgba(0,0,0,.06); }
+    .chart-wrap { height: 360px; }
+    table thead { background: var(--accent); color: #fff; }
+    code        { color: var(--accent); }
+  </style>
+
+  <!-- ─── DATA VIZ ─────────────────────────────────────────────────────────── -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="p-4">
+
+<header class="mb-4">
+  <h1 class="h3">Utility Capacity Scenario Sandbox <small class="text-muted fw-light">v0.1</small></h1>
+  <p class="text-muted">Monte-Carlo envelope of substation needs (<code>P10/P50/P90</code>) for 10 hypothetical sub-regions, 2025-2035.</p>
+</header>
+
+<!-- ─── CONTROL PANEL ──────────────────────────────────────────────────────── -->
+<div class="row g-4">
+
+  <div class="col-lg-4">
+    <div class="card p-4">
+      <h2 class="h6 mb-3">Simulation Settings</h2>
+
+      <div class="mb-2">
+        <label class="form-label">Iterations</label>
+        <input id="iterInput" type="number" class="form-control" value="1000" min="50" step="50">
+      </div>
+
+      <div class="mb-2">
+        <label class="form-label">Annual Load Growth (μ, σ) %</label>
+        <div class="input-group">
+          <input id="muInput"  type="number" class="form-control" value="3" step=".1">
+          <input id="sdInput"  type="number" class="form-control" value="1.5" step=".1">
+        </div>
+        <div class="form-text">Normal distribution per sub-region per year.</div>
+      </div>
+
+      <div class="mb-2">
+        <label class="form-label">Substation Size (MW)</label>
+        <input id="subSizeInput" type="number" class="form-control" value="50" step="10">
+      </div>
+
+      <div class="mb-2">
+        <label class="form-label">Substation CAPEX (M$)</label>
+        <input id="subCostInput" type="number" class="form-control" value="15" step="1">
+      </div>
+
+      <button id="runBtn" class="btn btn-primary w-100 mt-2">
+        ▶︎ Run Simulation
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── RESULTS PANE ─────────────────────────────────────────────────────── -->
+  <div class="col-lg-8">
+    <div class="card p-4 mb-4">
+      <h2 class="h6 mb-3">System-Level P10 / P50 / P90</h2>
+      <div class="chart-wrap">
+        <canvas id="systemChart"></canvas>
+      </div>
+    </div>
+
+    <div class="card p-4">
+      <h2 class="h6 mb-3">Sub-Region Summary (P10 / P50 / P90)</h2>
+      <div class="table-responsive">
+        <table id="summaryTable" class="table table-hover small align-middle mb-0">
+          <thead><tr>
+            <th>Region</th><th class="text-center">Capacity (MW)</th>
+            <th class="text-center">P10 Subs</th><th class="text-center">P50 Subs</th><th class="text-center">P90 Subs</th>
+            <th class="text-center">P50 CAPEX (M$)</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───  JAVASCRIPT CORE LOGIC ─────────────────────────────────────────────── -->
+<script>
+/* --------------------------------------------------------------
+   1. Hard-coded hypothetical sub-regions. Replace with API / CSV
+      in production. Each region gets base capacity and 2025 load.
+---------------------------------------------------------------- */
+const regions = [
+  {id: "North",       baseCap: 120, baseLoad:  80},
+  {id: "N-East",      baseCap: 100, baseLoad:  70},
+  {id: "East-Metro",  baseCap: 150, baseLoad: 110},
+  {id: "South-Metro", baseCap: 160, baseLoad: 120},
+  {id: "South",       baseCap: 110, baseLoad:  75},
+  {id: "S-West",      baseCap:  90, baseLoad:  55},
+  {id: "West",        baseCap: 130, baseLoad:  95},
+  {id: "NW-Rural",    baseCap:  70, baseLoad:  40},
+  {id: "Central",     baseCap: 140, baseLoad: 100},
+  {id: "Islands",     baseCap:  60, baseLoad:  35},
+];
+
+/* Small utilities --------------------------------------------- */
+const randNorm = (() => {
+  // Fast, min-quality Box-Muller
+  let spare, hasSpare = false;
+  return function(mu=0, sigma=1){
+    if (hasSpare){ hasSpare=false; return spare*sigma+mu; }
+    let u,v,s;
+    do { u=Math.random()*2-1; v=Math.random()*2-1; s=u*u+v*v; } while(s>=1||s===0);
+    s=Math.sqrt(-2*Math.log(s)/s); spare=v*s; hasSpare=true; return mu+sigma*u*s;
+  };
+})();
+
+/* Main simulation engine -------------------------------------- */
+function runSimulation(iterations, mu, sd, subSize, subCost){
+  // Stats holders
+  const subsDist = regions.map(() => []);   // per-region array of sub counts
+  const capexDist = [];                     // total capex per iteration
+
+  for(let k=0; k<iterations; k++){
+    let totalCapex = 0;
+
+    regions.forEach((r,i) => {
+      // Clone capacity & load for this iteration
+      let cap   = r.baseCap;
+      let load  = r.baseLoad;
+
+      // Project 2025->2035
+      for(let yr=2026; yr<=2035; yr++){
+        const growth = randNorm(mu, sd);  // % growth this year
+        load *= 1 + growth/100;
+
+        if(load > cap){
+          // Need N substations of fixed size
+          const needed = Math.ceil((load-cap)/subSize);
+          cap   += needed*subSize;
+          totalCapex += needed*subCost;
+        }
+      }
+      // Record outcome for this region
+      subsDist[i].push( (cap-r.baseCap) / subSize ); // # of additions
+    });
+    capexDist.push(totalCapex);
+  }
+
+  return {subsDist, capexDist};
+}
+
+/* Percentile util --------------------------------------------- */
+function percentile(arr, p){
+  if(!arr.length) return 0;
+  const sorted=[...arr].sort((a,b)=>a-b);
+  const idx = (p/100)*(sorted.length-1);
+  const lo  = Math.floor(idx), hi=Math.ceil(idx);
+  const w   = idx-lo;
+  return sorted[lo]*(1-w)+sorted[hi]*w;
+}
+
+/* -------------------------------------------------------------------
+   2. UI Handlers
+--------------------------------------------------------------------*/
+document.getElementById('runBtn').addEventListener('click', () => {
+  // Pull settings
+  const iters   = +document.getElementById('iterInput').value || 1000;
+  const mu      = +document.getElementById('muInput').value  || 3;
+  const sd      = +document.getElementById('sdInput').value  || 1.5;
+  const subSize = +document.getElementById('subSizeInput').value || 50;
+  const subCost = +document.getElementById('subCostInput').value || 15;
+
+  // Run Monte-Carlo
+  const {subsDist, capexDist} = runSimulation(iters, mu, sd, subSize, subCost);
+
+  // Build summary arrays
+  const p10 = [], p50 = [], p90 = [];
+  subsDist.forEach(arr=>{
+    p10.push(percentile(arr,10));
+    p50.push(percentile(arr,50));
+    p90.push(percentile(arr,90));
+  });
+
+  // System-level stats
+  const system = {
+    p10: p10.reduce((a,b)=>a+b,0),
+    p50: p50.reduce((a,b)=>a+b,0),
+    p90: p90.reduce((a,b)=>a+b,0),
+    capex10: percentile(capexDist,10),
+    capex50: percentile(capexDist,50),
+    capex90: percentile(capexDist,90)
+  };
+
+  updateChart(system);
+  updateTable(p10,p50,p90,subCost);
+});
+
+/* -------------------------------------------------------------------
+   3. Chart.js bar for system-level P10/P50/P90
+--------------------------------------------------------------------*/
+let sysChart;
+function updateChart(s){
+  if(sysChart) sysChart.destroy();
+  const ctx=document.getElementById('systemChart');
+  sysChart=new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels:['Substations','CAPEX (M$)'],
+      datasets:[
+        {label:'P10',data:[s.p10,s.capex10],backgroundColor:'#e9ecef'},
+        {label:'P50',data:[s.p50,s.capex50],backgroundColor:'#0d6efd55'},
+        {label:'P90',data:[s.p90,s.capex90],backgroundColor:'#0d6efd'}
+      ]
+    },
+    options:{
+      plugins:{legend:{position:'bottom'}},
+      responsive:true,
+      scales:{y:{beginAtZero:true}}
+    }
+  });
+}
+
+/* -------------------------------------------------------------------
+   4. HTML table for sub-region stats
+--------------------------------------------------------------------*/
+function updateTable(p10,p50,p90,subCost){
+  const tbody=document.querySelector('#summaryTable tbody');
+  tbody.innerHTML='';
+  regions.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td>${r.id}</td>
+      <td class="text-center">${r.baseCap}</td>
+      <td class="text-center">${p10[i].toFixed(1)}</td>
+      <td class="text-center fw-bold">${p50[i].toFixed(1)}</td>
+      <td class="text-center">${p90[i].toFixed(1)}</td>
+      <td class="text-center">${(p50[i]*subCost).toFixed(1)}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+</script>
+</body>
+</html>
