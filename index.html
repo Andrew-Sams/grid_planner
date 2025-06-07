@@ -22,12 +22,21 @@
 
   <!-- ─── DATA VIZ ─────────────────────────────────────────────────────────── -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </head>
 <body class="p-4">
 
 <header class="mb-4">
   <h1 class="h3">Utility Capacity Scenario Sandbox <small class="text-muted fw-light">v0.1</small></h1>
   <p class="text-muted">Monte-Carlo envelope of substation needs (<code>P10/P50/P90</code>) for 10 hypothetical sub-regions, 2025-2035.</p>
+ 
+  <button class="btn btn-link p-0" data-bs-toggle="collapse" data-bs-target="#helpSection" aria-expanded="false" aria-controls="helpSection">Show Help</button>
+  <div class="collapse mt-2" id="helpSection">
+    <div class="card card-body">
+      <p class="mb-2">Adjust the settings and click <strong>Run Simulation</strong>.</p>
+      <p class="mb-0">Results update in the chart and table.</p>
+    </div>
+  </div>
 </header>
 
 <!-- ─── CONTROL PANEL ──────────────────────────────────────────────────────── -->
