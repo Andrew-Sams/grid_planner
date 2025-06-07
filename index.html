@@ -30,6 +30,16 @@
   <p class="text-muted">Monte-Carlo envelope of substation needs (<code>P10/P50/P90</code>) for 10 hypothetical sub-regions, 2025-2035.</p>
 </header>
 
+<!-- ─── HELP TOGGLE ───────────────────────────────────────────────────────── -->
+<button class="btn btn-sm btn-outline-secondary mb-3" type="button" data-bs-toggle="collapse" data-bs-target="#helpCollapse" aria-expanded="false" aria-controls="helpCollapse">
+  Show Help
+</button>
+<div class="collapse" id="helpCollapse">
+  <div class="card card-body mb-3">
+    <p class="mb-0">Adjust the simulation settings and click <strong>Run Simulation</strong> to generate new capacity scenarios. Results summarize P10, P50 and P90 outcomes for each region.</p>
+  </div>
+</div>
+
 <!-- ─── CONTROL PANEL ──────────────────────────────────────────────────────── -->
 <div class="row g-4">
 
@@ -248,5 +258,6 @@ function updateTable(p10,p50,p90,subCost){
   });
 }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
